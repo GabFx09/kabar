@@ -1,0 +1,50 @@
+name: "Kabar — kirim pesan"
+description: "Kirim pesan & notifikasi push ke aplikasi Kabar (kotak pesan pribadi)."
+branding:
+  icon: message-circle
+  color: blue
+inputs:
+  judul:
+    description: "Judul pesan"
+    required: true
+  isi:
+    description: "Isi pesan (teks; mendukung **tebal**, _miring_, `kode`, tautan)"
+    required: false
+    default: ""
+  saluran:
+    description: "Nama chat/saluran tujuan"
+    required: false
+    default: "Umum"
+  url:
+    description: "Tautan opsional"
+    required: false
+    default: ""
+  prioritas:
+    description: "normal / tinggi (tinggi = tetap bunyi walau dibisukan)"
+    required: false
+    default: "normal"
+  token:
+    description: "Token GitHub ber-scope gist (simpan sebagai secret KABAR_TOKEN)"
+    required: true
+  vapid:
+    description: "Kunci privat VAPID (secret KABAR_VAPID) untuk notifikasi push"
+    required: false
+    default: ""
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: python3 -m pip install --quiet --disable-pip-version-check requests pywebpush
+    - shell: bash
+      env:
+        KABAR_TOKEN: ${{ inputs.token }}
+        KABAR_VAPID: ${{ inputs.vapid }}
+        K_JUDUL: ${{ inputs.judul }}
+        K_ISI: ${{ inputs.isi }}
+        K_SALURAN: ${{ inputs.saluran }}
+        K_URL: ${{ inputs.url }}
+        K_PRIO: ${{ inputs.prioritas }}
+      run: |
+        args=("$K_JUDUL" "$K_ISI" --saluran "$K_SALURAN" --prioritas "$K_PRIO")
+        if [ -n "$K_URL" ]; then args+=(--url "$K_URL"); fi
+        python3 "${{ github.action_path }}/kabar.py" "${args[@]}"

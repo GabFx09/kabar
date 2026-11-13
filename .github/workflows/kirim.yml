@@ -1,0 +1,37 @@
+name: Kirim pesan manual
+
+# Kirim pesan dari tab Actions (Run workflow) atau terminal:
+#   gh workflow run kirim.yml -R GabFx09/kabar -f judul="Halo" -f isi="Tes" -f saluran="Umum"
+on:
+  workflow_dispatch:
+    inputs:
+      judul:
+        description: Judul
+        required: true
+        default: "Tes Kabar"
+      isi:
+        description: Isi
+        default: "Notifikasi berfungsi ✓"
+      saluran:
+        description: Saluran
+        default: "Umum"
+      prioritas:
+        description: normal / tinggi
+        default: "normal"
+
+permissions:
+  contents: read
+
+jobs:
+  kirim:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./
+        with:
+          judul: ${{ inputs.judul }}
+          isi: ${{ inputs.isi }}
+          saluran: ${{ inputs.saluran }}
+          prioritas: ${{ inputs.prioritas }}
+          token: ${{ secrets.KABAR_TOKEN }}
+          vapid: ${{ secrets.KABAR_VAPID }}
