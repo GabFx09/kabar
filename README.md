@@ -11,6 +11,10 @@ mengirim pesan ke **saluran**; setiap saluran tampil sebagai chat, lengkap denga
 - Pesan prioritas **tinggi** tetap berbunyi walau saluran dibisukan atau sedang **jam tenang**.
 - Tampilan bergaya terminal; ketik `/bantuan` di chat untuk perintah (`/cari`, `/bisukan`, `/hapus`, `/tema` …).
 - Status dibaca tersinkron antar perangkat; tekan lama sebuah pesan untuk salin/hapus.
+- **Enkripsi end-to-end** (AES-256-GCM + PBKDF2): aktifkan di Setelan; pengirim memakai `KABAR_KUNCI`.
+- **Tombol aksi** di pesan, dan skrip pengirim bisa menunggu jawabannya (`tunggu_jawaban`).
+- **Gambar** (URL atau berkas ≤ 600 KB, ikut terenkripsi bila enkripsi aktif).
+- **Pengingat terjadwal** dari chat: `/ingatkan besok 08:00 bayar tagihan`, `/ingatkan setiap senin 09:00 rapat`, `/ingatkan 30m ...`.
 - Tersinkron di semua perangkat yang masuk dengan token yang sama.
 
 ## 1. Mulai
@@ -27,8 +31,9 @@ Pengirim membutuhkan dua nilai rahasia:
 |---|---|
 | `KABAR_TOKEN` | token GitHub scope gist (sama dengan langkah 1) |
 | `KABAR_VAPID` | kunci privat notifikasi milik pemilik aplikasi ini (tanpa ini pesan tetap masuk, tapi tanpa push) |
+| `KABAR_KUNCI` | kata sandi enkripsi — hanya bila enkripsi diaktifkan |
 
-**Terminal / Python** (`pip install requests pywebpush`):
+**Terminal / Python** (`pip install requests pywebpush cryptography`):
 
 ```bash
 python kabar.py "Backup selesai" "1,2 GB dalam 3 menit" --saluran Server
@@ -67,6 +72,38 @@ curl -X POST -H "Authorization: Bearer TOKEN_FINE_GRAINED" \
 `gh workflow run kirim.yml -R GabFx09/kabar -f judul="Halo" -f isi="Tes"` (repo ini butuh secret `KABAR_TOKEN` & `KABAR_VAPID`).
 
 Format isi: `**tebal**`, `_miring_`, `` `kode` ``, tautan otomatis, baris baru. Untuk HTML sederhana: `kabar.kirim(..., html="<b>..</b>")` atau `--html`.
+
+### Tombol aksi & jawaban
+
+```python
+m = kabar.kirim("Deploy ke produksi?", "versi 2.4.1", saluran="Deploy", tombol=["Lanjut", "Batal"])
+if kabar.tunggu_jawaban(m["id"], batas_detik=900) == "Lanjut":
+    deploy()
+```
+
+```bash
+python kabar.py "Matikan server?" "" -s Server --tombol "Ya,Tidak" --tunggu 600   # exit 0 bila dijawab
+```
+
+### Gambar
+
+```python
+kabar.kirim("Grafik harian", "p95 turun 18%", saluran="Laporan", gambar="grafik.png")   # atau URL https
+```
+
+### Pengingat terjadwal
+
+Ketik di chat mana pun: `/ingatkan 07:30 minum obat`, `/ingatkan besok 08:00 ...`, `/ingatkan lusa 10:00 ...`,
+`/ingatkan 25/12 09:00 ...`, `/ingatkan 30m ...` / `2 jam`, `/ingatkan setiap hari 06:00 ...`,
+`/ingatkan setiap senin 09:00 ...`. Lihat `/pengingat`, batalkan `/batal 2`. Pengingat dikirim oleh workflow
+*Pengingat terjadwal* di repo ini (tiap ±10 menit) — perlu secret `KABAR_TOKEN` & `KABAR_VAPID` di repo ini.
+
+### Enkripsi
+
+Aktifkan di **Setelan → Enkripsi end-to-end**. Semua pengirim harus diberi secret/variabel `KABAR_KUNCI` berisi kata
+sandi yang sama; tanpa itu pengiriman gagal (agar tidak ada pesan tak terenkripsi yang tersimpan diam-diam).
+Nama saluran, waktu, dan prioritas tetap terlihat (dibutuhkan untuk menyusun chat & notifikasi). Isi notifikasi push
+dienkripsi oleh protokol Web Push sendiri. Pengingat terenkripsi dikirim tanpa server perlu tahu kata sandi.
 
 ## Kunci notifikasi (VAPID)
 

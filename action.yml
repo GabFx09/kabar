@@ -23,6 +23,18 @@ inputs:
     description: "normal / tinggi (tinggi = tetap bunyi walau dibisukan)"
     required: false
     default: "normal"
+  tombol:
+    description: "Tombol aksi dipisah koma, mis. \"Setuju,Tolak\""
+    required: false
+    default: ""
+  gambar:
+    description: "URL gambar atau path berkas di runner (maks 600 KB)"
+    required: false
+    default: ""
+  kunci:
+    description: "Kata sandi enkripsi (secret KABAR_KUNCI) bila enkripsi aktif"
+    required: false
+    default: ""
   token:
     description: "Token GitHub ber-scope gist (simpan sebagai secret KABAR_TOKEN)"
     required: true
@@ -34,11 +46,14 @@ runs:
   using: composite
   steps:
     - shell: bash
-      run: python3 -m pip install --quiet --disable-pip-version-check requests pywebpush
+      run: python3 -m pip install --quiet --disable-pip-version-check requests pywebpush cryptography
     - shell: bash
       env:
         KABAR_TOKEN: ${{ inputs.token }}
         KABAR_VAPID: ${{ inputs.vapid }}
+        KABAR_KUNCI: ${{ inputs.kunci }}
+        K_TOMBOL: ${{ inputs.tombol }}
+        K_GAMBAR: ${{ inputs.gambar }}
         K_JUDUL: ${{ inputs.judul }}
         K_ISI: ${{ inputs.isi }}
         K_SALURAN: ${{ inputs.saluran }}
@@ -47,4 +62,6 @@ runs:
       run: |
         args=("$K_JUDUL" "$K_ISI" --saluran "$K_SALURAN" --prioritas "$K_PRIO")
         if [ -n "$K_URL" ]; then args+=(--url "$K_URL"); fi
+        if [ -n "$K_TOMBOL" ]; then args+=(--tombol "$K_TOMBOL"); fi
+        if [ -n "$K_GAMBAR" ]; then args+=(--gambar "$K_GAMBAR"); fi
         python3 "${{ github.action_path }}/kabar.py" "${args[@]}"

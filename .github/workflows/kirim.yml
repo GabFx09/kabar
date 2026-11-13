@@ -43,3 +43,5 @@ jobs:
           url: ${{ github.event.client_payload.url || '' }}
           token: ${{ secrets.KABAR_TOKEN }}
           vapid: ${{ secrets.KABAR_VAPID }}
+          kunci: ${{ secrets.KABAR_KUNCI }}
+          tombol: ${{ github.event.client_payload.tombol || '' }}

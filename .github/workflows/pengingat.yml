@@ -1,0 +1,36 @@
+name: Pengingat terjadwal
+
+# Mengirim pengingat yang dibuat lewat /ingatkan di aplikasi.
+# Perlu secret KABAR_TOKEN (dan KABAR_VAPID untuk notifikasi push) di repo ini.
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pengingat
+  cancel-in-progress: false
+
+jobs:
+  pengingat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      KABAR_TOKEN: ${{ secrets.KABAR_TOKEN }}
+      KABAR_VAPID: ${{ secrets.KABAR_VAPID }}
+    steps:
+      - name: Lewati bila secret belum diatur
+        if: ${{ env.KABAR_TOKEN == '' }}
+        run: echo "Secret KABAR_TOKEN belum diatur di repo ini."
+      - uses: actions/checkout@v4
+        if: ${{ env.KABAR_TOKEN != '' }}
+        with:
+          sparse-checkout: kabar.py
+          sparse-checkout-cone-mode: false
+      - if: ${{ env.KABAR_TOKEN != '' }}
+        run: python3 -m pip install --quiet --disable-pip-version-check requests pywebpush
+      - if: ${{ env.KABAR_TOKEN != '' }}
+        run: python3 kabar.py --jalankan-pengingat
