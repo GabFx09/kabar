@@ -8,7 +8,9 @@ mengirim pesan ke **saluran**; setiap saluran tampil sebagai chat, lengkap denga
 
 - Tanpa server sendiri: pesan disimpan di **gist rahasia** milik Anda; notifikasi dikirim dengan Web Push (VAPID).
 - Chat per saluran, pesan belum dibaca, sematkan, bisukan, cari, "Catatan Saya" untuk catatan pribadi.
-- Pesan prioritas **tinggi** tetap berbunyi walau saluran dibisukan.
+- Pesan prioritas **tinggi** tetap berbunyi walau saluran dibisukan atau sedang **jam tenang**.
+- Tampilan bergaya terminal; ketik `/bantuan` di chat untuk perintah (`/cari`, `/bisukan`, `/hapus`, `/tema` …).
+- Status dibaca tersinkron antar perangkat; tekan lama sebuah pesan untuk salin/hapus.
 - Tersinkron di semua perangkat yang masuk dengan token yang sama.
 
 ## 1. Mulai
@@ -50,6 +52,15 @@ kabar.kirim_banyak([{"judul": "A", "isi": "..."}, {"judul": "B", "isi": "..."}],
     isi: Commit ${{ github.sha }}
     token: ${{ secrets.KABAR_TOKEN }}
     vapid: ${{ secrets.KABAR_VAPID }}
+```
+
+**HTTP / curl dari mana saja** (Shortcuts iPhone, IFTTT, server tanpa Python) — butuh token *fine-grained*
+khusus repo ini dengan izin **Contents: Read and write**, plus secret `KABAR_TOKEN` & `KABAR_VAPID` di repo ini:
+
+```bash
+curl -X POST -H "Authorization: Bearer TOKEN_FINE_GRAINED" \
+  https://api.github.com/repos/GabFx09/kabar/dispatches \
+  -d '{"event_type":"kirim","client_payload":{"judul":"Halo","isi":"Tes dari curl","saluran":"Umum"}}'
 ```
 
 **Manual dari GitHub:** tab Actions → *Kirim pesan manual* → Run workflow, atau

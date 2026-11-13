@@ -1,8 +1,15 @@
 name: Kirim pesan manual
 
-# Kirim pesan dari tab Actions (Run workflow) atau terminal:
-#   gh workflow run kirim.yml -R GabFx09/kabar -f judul="Halo" -f isi="Tes" -f saluran="Umum"
+# Tiga cara memicu:
+#  1. Tab Actions -> Run workflow
+#  2. gh workflow run kirim.yml -R GabFx09/kabar -f judul="Halo" -f isi="Tes" -f saluran="Umum"
+#  3. HTTP dari mana saja (curl, Shortcuts iPhone, IFTTT, server) — butuh token fine-grained
+#     untuk repo ini dengan izin "Contents: Read and write":
+#     curl -X POST -H "Authorization: Bearer TOKEN" https://api.github.com/repos/GabFx09/kabar/dispatches \
+#       -d '{"event_type":"kirim","client_payload":{"judul":"Halo","isi":"Tes","saluran":"Umum"}}'
 on:
+  repository_dispatch:
+    types: [kirim]
   workflow_dispatch:
     inputs:
       judul:
@@ -29,9 +36,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: ./
         with:
-          judul: ${{ inputs.judul }}
-          isi: ${{ inputs.isi }}
-          saluran: ${{ inputs.saluran }}
-          prioritas: ${{ inputs.prioritas }}
+          judul: ${{ inputs.judul || github.event.client_payload.judul || 'Pesan' }}
+          isi: ${{ inputs.isi || github.event.client_payload.isi || '' }}
+          saluran: ${{ inputs.saluran || github.event.client_payload.saluran || 'Umum' }}
+          prioritas: ${{ inputs.prioritas || github.event.client_payload.prioritas || 'normal' }}
+          url: ${{ github.event.client_payload.url || '' }}
           token: ${{ secrets.KABAR_TOKEN }}
           vapid: ${{ secrets.KABAR_VAPID }}

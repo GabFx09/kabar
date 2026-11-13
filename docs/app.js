@@ -34,12 +34,18 @@ const S = {
 /* ------------------------------------------------------------ util */
 function toast(t) { const el = $('#toast'); el.textContent = t; el.classList.add('show'); clearTimeout(toast._t); toast._t = setTimeout(() => el.classList.remove('show'), 2200); }
 function color(name) {
-  const pal = ['#e17076', '#7bc862', '#65aadd', '#a695e7', '#ee7aae', '#6ec9cb', '#faa774', '#5a8fbb'];
+  const pal = ['#ff9f1a', '#3cc8ff', '#1fe07f', '#ffd23f', '#ff7ab6', '#b892ff', '#5eead4', '#ff6b5e'];
   let h = 0; for (const c of name) h = (h * 31 + c.charCodeAt(0)) >>> 0;
   return (S.cfg.channels[name] && S.cfg.channels[name].color) || pal[h % pal.length];
 }
 function initials(n) { const w = n.trim().split(/\s+/); return ((w[0] || '?')[0] + (w[1] ? w[1][0] : '')).toUpperCase(); }
-function avatar(n, sm) { return `<div class="av ${sm ? 'sm' : ''}" style="background:${color(n)}">${n === NOTES ? '🔖' : esc(initials(n))}</div>`; }
+function avatar(n, sm) { return `<div class="av ${sm ? 'sm' : ''}" style="background:${color(n)}">${n === NOTES ? '#' : esc(initials(n))}</div>`; }
+function clockTxt() {
+  const d = new Date();
+  const loc = d.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }).replace('.', ':');
+  const n = totalUnread();
+  return `<b>${loc}</b>${n ? ` · <span style="color:var(--accent)">${n} BARU</span>` : ''}`;
+}
 function hhmm(t) { return new Date(t).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }).replace('.', ':'); }
 function shortTime(t) {
   const d = new Date(t), now = new Date();
@@ -131,6 +137,7 @@ async function sync(force) {
     const changed = msgs.length !== S.msgs.length || (msgs.at(-1) || {}).id !== (S.msgs.at(-1) || {}).id || JSON.stringify(cfg) !== JSON.stringify(S.cfg);
     S.msgs = msgs; S.cfg = Object.assign({ devices: [], channels: {} }, cfg);
     store.set('msgs', msgs.slice(-1500)); store.set('cfg', S.cfg);
+    mergeRead();
     S.synced = Date.now();
     return changed;
   } finally { S.syncing = false; }
@@ -147,6 +154,26 @@ async function writeFiles(mutate) {
   await gh('/gists/' + S.gid, { method: 'PATCH', body: JSON.stringify({ files }) });
   if (res.cfg) { S.cfg = res.cfg; store.set('cfg', S.cfg); }
   if (res.box) { S.msgs = res.box.messages; store.set('msgs', S.msgs); }
+}
+
+/* ------------------------------------------------------------ status dibaca (tersinkron) */
+function markRead(ch) {
+  S.read[ch] = Date.now();
+  store.set('read', S.read);
+  clearTimeout(markRead._t);
+  markRead._t = setTimeout(() => {
+    writeFiles(({ cfg }) => {
+      cfg.read = cfg.read || {};
+      let changed = false;
+      Object.entries(S.read).forEach(([k, v]) => { if ((cfg.read[k] || 0) < v - 1000) { cfg.read[k] = v; changed = true; } });
+      return changed ? { cfg } : null;
+    }).catch(() => {});
+  }, 4000);
+}
+function mergeRead() {
+  const r = (S.cfg && S.cfg.read) || {};
+  Object.entries(r).forEach(([k, v]) => { if ((S.read[k] || 0) < v) S.read[k] = v; });
+  store.set('read', S.read);
 }
 
 /* ------------------------------------------------------------ data turunan */
@@ -208,7 +235,8 @@ function listHtml(r) {
   const q = S.q.trim().toLowerCase();
   let list = channels();
   if (q) list = list.filter((c) => c.name.toLowerCase().includes(q) || S.msgs.some((m) => (m.ch || 'Umum') === c.name && ((m.title || '') + ' ' + (m.text || '') + ' ' + (m.html || '')).toLowerCase().includes(q)));
-  return `<div class="bar"><h1>Kabar</h1>
+  return `<div class="bar"><div class="brand"><span class="brand-mark">KB</span><span class="brand-txt"><b>KABAR</b><small>MESSAGE TERMINAL</small></span></div>
+      <div class="clock" id="clock">${clockTxt()}</div>
       <button class="ib" id="btnSet" title="Setelan">${ICON.gear}</button></div>
     <label class="search">${ICON.search}<input id="q" placeholder="Cari chat atau pesan" value="${esc(S.q)}"></label>
     <div class="chats">${list.map((c) => {
@@ -217,7 +245,7 @@ function listHtml(r) {
         <div style="min-width:0"><div class="nm">${esc(c.name)} ${meta.mute ? ICON.mute : ''}</div><div class="prev">${preview(c.last)}</div></div>
         <div class="side"><div class="tm">${c.last ? shortTime(c.last.t) : ''}</div>${c.unread ? `<div class="cnt ${meta.mute ? 'muted' : ''}">${c.unread > 99 ? '99+' : c.unread}</div>` : meta.pin ? `<div class="tm">${ICON.pin}</div>` : ''}</div></div>`;
     }).join('') || '<div class="empty">Tidak ditemukan.</div>'}</div>
-    <button class="fab" id="btnNew" title="Chat baru">${ICON.pen}</button>`;
+    <button class="fab" id="btnNew" title="Chat baru">+ CHAT</button>`;
 }
 function bindList() {
   $$('.crow').forEach((el) => { el.onclick = () => { location.hash = '#/c/' + encodeURIComponent(el.dataset.ch); }; });
@@ -237,7 +265,7 @@ function chatHtml(ch) {
   let out = '', day = '', sep = false;
   list.forEach((m) => {
     const dl = dayLabel(m.t);
-    if (dl !== day) { out += `<div class="day"><span>${esc(dl)}</span></div>`; day = dl; }
+    if (dl !== day) { out += `<div class="day">${esc(dl)}</div>`; day = dl; }
     if (!sep && lastRead && m.from !== 'me' && Date.parse(m.t) > lastRead) { out += '<div class="newsep">Pesan belum dibaca</div>'; sep = true; }
     const body = m.html ? cleanHtml(m.html) : fmtText(m.text || '');
     out += `<div class="bub ${m.from === 'me' ? 'me' : 'bot'} ${m.prio === 'tinggi' ? 'hi' : ''}" data-id="${esc(m.id)}"><div>
@@ -250,13 +278,13 @@ function chatHtml(ch) {
       <div class="ttl" id="chTitle"><b>${esc(ch)}</b><small>${n} pesan${meta.mute ? ' · dibisukan' : ''}</small></div>
       <button class="ib" id="btnMenu" title="Menu">${ICON.menu}</button></div>
     <div class="msgs" id="msgs">${out || `<div class="empty"><b>${esc(ch)}</b>${ch === NOTES ? 'Tulis catatan untuk diri sendiri — tersinkron ke semua perangkat.' : 'Belum ada pesan. Kirim dari skrip dengan <code>--saluran "' + esc(ch) + '"</code>, atau tulis di bawah.'}</div>`}</div>
-    <form class="composer" id="composer"><textarea id="txt" rows="1" placeholder="Tulis pesan…" enterkeyhint="send"></textarea>
-      <button class="send" title="Kirim"><svg viewBox="0 0 24 24"><path d="M3 20l18-8L3 4v6l12 2-12 2z"/></svg></button></form>`;
+    <form class="composer" id="composer"><span class="pr">&gt;</span><textarea id="txt" rows="1" placeholder="Tulis pesan atau /bantuan" enterkeyhint="send"></textarea>
+      <button class="send" title="Kirim">KIRIM</button></form>`;
 }
 function bindChat(ch) {
   const box = $('#msgs');
   box.scrollTop = box.scrollHeight;
-  S.read[ch] = Date.now(); store.set('read', S.read); setBadge();
+  markRead(ch); setBadge();
   $('#btnBack').onclick = () => { location.hash = '#/'; };
   const txt = $('#txt');
   txt.oninput = () => { txt.style.height = 'auto'; txt.style.height = Math.min(140, txt.scrollHeight) + 'px'; };
@@ -265,13 +293,59 @@ function bindChat(ch) {
     e.preventDefault();
     const v = txt.value.trim();
     if (!v) return;
+    if (v.startsWith('/') && await slashCommand(v, ch)) { txt.value = ''; return; }
     const m = { id: 'u' + Date.now(), t: new Date().toISOString(), ch, from: 'me', text: v.slice(0, 6000) };
     S.msgs.push(m); txt.value = ''; render();
     try { await writeFiles(({ box }) => ({ box: { messages: [...(box.messages || []).filter((x) => x.id !== m.id), m].slice(-1500), updated: m.t } })); }
     catch (err) { toast('Gagal menyimpan: ' + err.message); }
   };
   $('#btnMenu').onclick = () => chatMenu(ch);
+  $$('.bub[data-id]').forEach((b) => {
+    b.oncontextmenu = (e) => { e.preventDefault(); msgMenu(b.dataset.id); };
+    let t;
+    b.ontouchstart = () => { t = setTimeout(() => msgMenu(b.dataset.id), 550); };
+    b.ontouchend = b.ontouchmove = () => clearTimeout(t);
+  });
   $('#chTitle').onclick = () => chatMenu(ch);
+}
+async function slashCommand(v, ch) {
+  const [cmd, ...rest] = v.slice(1).split(/\s+/);
+  const arg = rest.join(' ');
+  const c = cmd.toLowerCase();
+  if (['bantuan', 'help', '?'].includes(c)) {
+    sysNote(ch, '**Perintah**\n`/cari teks` — cari di semua chat\n`/bisukan` — bisukan/bunyikan chat ini\n`/sematkan` — sematkan chat\n`/baca` — tandai semua dibaca\n`/hapus` — kosongkan chat ini\n`/tema` — gelap/terang\n`/setelan` — buka setelan\nTekan lama (atau klik kanan) sebuah pesan untuk salin/hapus.');
+    return true;
+  }
+  if (c === 'cari') { S.q = arg; location.hash = '#/'; render(); return true; }
+  if (c === 'tema') { toggleTheme(); return true; }
+  if (c === 'setelan') { location.hash = '#/setelan'; return true; }
+  if (['bisukan', 'sematkan', 'baca', 'hapus'].includes(c)) { await chatAction({ bisukan: 'mute', sematkan: 'pin', baca: 'read', hapus: 'clear' }[c], ch); return true; }
+  return false;
+}
+function sysNote(ch, text) {
+  const box = $('#msgs');
+  if (!box) return;
+  box.insertAdjacentHTML('beforeend', `<div class="bub sys"><div>${fmtText(text)}</div></div>`);
+  box.scrollTop = box.scrollHeight;
+}
+function msgMenu(id) {
+  const m = S.msgs.find((x) => x.id === id);
+  if (!m) return;
+  openSheet(`<h3>Pesan</h3>
+    <button class="menu-item" data-a="copy">⧉ Salin teks</button>
+    ${m.url ? '<button class="menu-item" data-a="link">↗ Buka tautan</button>' : ''}
+    <button class="menu-item" data-a="del" style="color:var(--bad)">✕ Hapus pesan ini</button>`);
+  $$('.sheet [data-a]').forEach((b) => { b.onclick = async () => {
+    closeSheet();
+    if (b.dataset.a === 'copy') {
+      const txt = (m.title ? m.title + '\n' : '') + (m.html ? cleanHtml(m.html).replace(/<br>/g, '\n').replace(/<[^>]+>/g, '') : m.text || '');
+      try { await navigator.clipboard.writeText(txt); toast('Disalin'); } catch (e) { prompt('Salin:', txt); }
+    } else if (b.dataset.a === 'link') window.open(m.url, '_blank', 'noopener');
+    else {
+      try { await writeFiles(({ box }) => ({ box: { messages: (box.messages || []).filter((x) => x.id !== id), updated: new Date().toISOString() } })); toast('Pesan dihapus'); render(); }
+      catch (e) { toast('Gagal: ' + e.message); }
+    }
+  }; });
 }
 function chatMenu(ch) {
   const meta = S.cfg.channels[ch] || {};
@@ -281,11 +355,12 @@ function chatMenu(ch) {
     <button class="menu-item" data-a="read">✓ Tandai semua dibaca</button>
     <button class="menu-item" data-a="clear" style="color:var(--bad)">🗑 Hapus semua pesan di chat ini</button>
     <p style="font-size:12.5px;color:var(--text-3)">Chat yang dibisukan tetap menerima pesan, tanpa notifikasi — kecuali pesan berprioritas tinggi.</p>`);
-  $$('.sheet [data-a]').forEach((b) => { b.onclick = async () => {
-    const a = b.dataset.a;
-    closeSheet();
+  $$('.sheet [data-a]').forEach((b) => { b.onclick = () => { closeSheet(); chatAction(b.dataset.a, ch); }; });
+}
+async function chatAction(a, ch) {
+  {
     try {
-      if (a === 'read') { S.read[ch] = Date.now(); store.set('read', S.read); render(); return; }
+      if (a === 'read') { markRead(ch); render(); return; }
       if (a === 'clear') {
         if (!confirm(`Hapus semua pesan di "${ch}"? Tidak bisa dibatalkan.`)) return;
         await writeFiles(({ box }) => ({ box: { messages: (box.messages || []).filter((m) => (m.ch || 'Umum') !== ch), updated: new Date().toISOString() } }));
@@ -301,7 +376,7 @@ function chatMenu(ch) {
       toast(a === 'mute' ? (S.cfg.channels[ch].mute ? 'Dibisukan' : 'Notifikasi aktif') : 'Disimpan');
       render();
     } catch (e) { toast('Gagal: ' + e.message); }
-  }; });
+  }
 }
 
 /* ------------------------------------------------------------ notifikasi push */
@@ -317,31 +392,76 @@ function deviceName() {
   const br = /edg\//i.test(ua) ? 'Edge' : /firefox/i.test(ua) ? 'Firefox' : /chrome/i.test(ua) ? 'Chrome' : /safari/i.test(ua) ? 'Safari' : 'Browser';
   return `${os} · ${br}`;
 }
+function withTimeout(p, ms, msg) {
+  return Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(msg)), ms))]);
+}
+function pushOut(text, kind) {
+  const el = $('#pushOut');
+  if (el) { el.className = 'out ' + (kind || ''); el.textContent = text; }
+  store.set('lastPushMsg', { text, kind, t: Date.now() });
+}
 async function enablePush() {
-  if (!pushSupported()) {
-    const ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
-    alert(ios ? 'Di iPhone/iPad, notifikasi hanya tersedia bila Kabar dipasang ke Layar Utama (iOS 16.4+): Safari → Bagikan → Tambahkan ke Layar Utama, lalu buka dari ikonnya.' : 'Browser ini belum mendukung notifikasi push.');
-    return;
+  const step = (t) => pushOut('… ' + t);
+  try {
+    if (!pushSupported()) {
+      const ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
+      throw new Error(ios ? 'iPhone/iPad: notifikasi hanya tersedia bila Kabar dibuka dari ikon Layar Utama (Safari → Bagikan → Tambahkan ke Layar Utama), iOS 16.4+.' : 'Browser ini tidak mendukung notifikasi push. Coba Chrome/Edge/Firefox terbaru.');
+    }
+    step('meminta izin notifikasi');
+    const perm = await Notification.requestPermission();
+    if (perm !== 'granted') throw new Error(perm === 'denied' ? 'Izin notifikasi DIBLOKIR. Buka pengaturan situs di browser (ikon gembok/ⓘ → Notifikasi → Izinkan), lalu coba lagi.' : 'Izin notifikasi belum diberikan.');
+    step('menyiapkan service worker');
+    await navigator.serviceWorker.register('sw.js');
+    const reg = await withTimeout(navigator.serviceWorker.ready, 10000, 'Service worker belum aktif. Tutup lalu buka lagi Kabar, kemudian coba lagi.');
+    step('mendaftarkan perangkat ke layanan push');
+    let sub = await reg.pushManager.getSubscription();
+    if (sub && sub.options && sub.options.applicationServerKey) {
+      const cur = btoa(String.fromCharCode(...new Uint8Array(sub.options.applicationServerKey))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+      if (cur !== VAPID_PUBLIC) { await sub.unsubscribe(); sub = null; }
+    }
+    if (!sub) sub = await withTimeout(reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(VAPID_PUBLIC) }), 20000, 'Layanan push tidak merespons (periksa koneksi, atau browser memblokir layanan push).');
+    const j = sub.toJSON();
+    if (!j.endpoint || !j.keys) throw new Error('Langganan push tidak lengkap dari browser.');
+    step('menyimpan perangkat ke gist');
+    await writeFiles(({ cfg }) => {
+      cfg.devices = (cfg.devices || []).filter((d) => d.endpoint !== j.endpoint);
+      cfg.devices.push({ endpoint: j.endpoint, keys: j.keys, name: deviceName(), added: new Date().toISOString().slice(0, 10) });
+      return { cfg };
+    });
+    S.myEndpoint = j.endpoint; store.set('myEndpoint', j.endpoint);
+    await sync(true);
+    if (!(S.cfg.devices || []).some((d) => d.endpoint === j.endpoint)) throw new Error('Perangkat gagal tersimpan di gist (coba lagi).');
+    try { await reg.showNotification('KABAR · notifikasi aktif ✓', { body: 'Pesan baru akan muncul di sini, juga saat Kabar ditutup.', icon: 'icons/icon-192.png', badge: 'icons/badge-96.png', tag: 'kabar-test' }); } catch (e) { /* */ }
+    pushOut('✓ Notifikasi aktif & perangkat terdaftar: ' + deviceName(), 'okk');
+    toast('Notifikasi aktif');
+    render();
+  } catch (e) {
+    pushOut('✕ ' + e.message, 'err');
+    toast('Gagal mengaktifkan notifikasi');
   }
-  const perm = await Notification.requestPermission();
-  if (perm !== 'granted') { toast('Izin notifikasi ditolak'); return; }
-  const reg = await navigator.serviceWorker.ready;
-  let sub = await reg.pushManager.getSubscription();
-  if (sub && sub.options && sub.options.applicationServerKey) {
-    const cur = btoa(String.fromCharCode(...new Uint8Array(sub.options.applicationServerKey))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-    if (cur !== VAPID_PUBLIC) { await sub.unsubscribe(); sub = null; }
-  }
-  if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(VAPID_PUBLIC) });
-  const j = sub.toJSON();
-  await writeFiles(({ cfg }) => {
-    cfg.devices = (cfg.devices || []).filter((d) => d.endpoint !== j.endpoint);
-    cfg.devices.push({ endpoint: j.endpoint, keys: j.keys, name: deviceName(), added: new Date().toISOString().slice(0, 10) });
-    return { cfg };
-  });
-  S.myEndpoint = j.endpoint; store.set('myEndpoint', j.endpoint);
-  await reg.showNotification('Kabar · notifikasi aktif ✓', { body: 'Pesan baru akan muncul di sini, juga saat Kabar ditutup.', icon: 'icons/icon-192.png', badge: 'icons/badge-96.png', tag: 'kabar-test' });
-  toast('Notifikasi aktif di perangkat ini');
-  render();
+}
+async function diagnose() {
+  const el = $('#diag');
+  if (!el) return;
+  const row = (k, v, c) => `<div><span>${k}</span><b class="${c}">${v}</b></div>`;
+  const ua = navigator.userAgent;
+  const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone;
+  let swState = 'tidak ada', subOk = false;
+  try {
+    const reg = await navigator.serviceWorker.getRegistration();
+    swState = reg ? (reg.active ? 'aktif' : 'memasang') : 'belum terpasang';
+    if (reg && reg.pushManager) subOk = !!(await reg.pushManager.getSubscription());
+  } catch (e) { swState = 'error'; }
+  const perm = 'Notification' in window ? Notification.permission : 'tidak didukung';
+  const reg2 = (S.cfg.devices || []).some((d) => d.endpoint === S.myEndpoint);
+  el.innerHTML = row('Browser', esc(deviceName()), '') +
+    row('Mode aplikasi (layar utama)', standalone ? 'ya' : 'tidak', standalone ? 'ok' : /iphone|ipad/i.test(ua) ? 'bad' : 'warn') +
+    row('Dukungan push', pushSupported() ? 'ya' : 'tidak', pushSupported() ? 'ok' : 'bad') +
+    row('Izin notifikasi', perm, perm === 'granted' ? 'ok' : perm === 'denied' ? 'bad' : 'warn') +
+    row('Service worker', swState, swState === 'aktif' ? 'ok' : 'warn') +
+    row('Langganan push di browser', subOk ? 'ada' : 'belum', subOk ? 'ok' : 'warn') +
+    row('Terdaftar di gist', reg2 ? 'ya' : 'belum', reg2 ? 'ok' : 'bad') +
+    row('Perangkat terdaftar (total)', String((S.cfg.devices || []).length), (S.cfg.devices || []).length ? 'ok' : 'warn');
 }
 async function removeDevice(endpoint) {
   await writeFiles(({ cfg }) => { cfg.devices = (cfg.devices || []).filter((d) => d.endpoint !== endpoint); return { cfg }; });
@@ -362,7 +482,14 @@ function settingsHtml() {
     <div class="card"><h3>Notifikasi</h3>
       <p>${mine ? '<span class="status-dot"></span>Aktif di perangkat ini.' : 'Belum aktif di perangkat ini. Aktifkan agar pesan baru muncul di layar kunci — juga saat Kabar ditutup.'}</p>
       ${devs.length ? devs.map((d) => `<div class="dev"><span>📱 ${esc(d.name || 'Perangkat')}${d.endpoint === S.myEndpoint ? ' <b>(ini)</b>' : ''}<br><small style="color:var(--text-3)">sejak ${esc(d.added || '')}</small></span><button class="btn bad" data-rm="${esc(d.endpoint)}">Hapus</button></div>`).join('') : ''}
-      <div class="row-btns"><button class="btn pri" id="btnPush">${mine ? 'Perbarui notifikasi' : '🔔 Aktifkan notifikasi'}</button></div></div>
+      <div class="row-btns"><button class="btn pri" id="btnPush">${mine ? 'Daftarkan ulang' : 'Aktifkan notifikasi'}</button><button class="btn" id="btnLocal">Uji tampilan notifikasi</button></div>
+      <div id="pushOut" class="out ${(store.get('lastPushMsg', {}) || {}).kind || ''}">${esc((store.get('lastPushMsg', {}) || {}).text || '')}</div>
+      <div class="diag" id="diag">memeriksa…</div></div>
+    <div class="card"><h3>Jam tenang</h3>
+      <p>Tidak ada bunyi notifikasi pada jam ini (pesan tetap masuk). Pesan berprioritas <b>tinggi</b> tetap berbunyi.</p>
+      <div class="inline"><label><input type="checkbox" id="qOn" ${(S.cfg.quiet || {}).on ? 'checked' : ''}> aktif</label>
+        dari <select id="qFrom">${hourOpts((S.cfg.quiet || {}).from ?? 22)}</select> sampai <select id="qTo">${hourOpts((S.cfg.quiet || {}).to ?? 6)}</select>
+        <span style="color:var(--text-3)">(${esc(Intl.DateTimeFormat().resolvedOptions().timeZone)})</span></div></div>
     <div class="card"><h3>Kirim pesan dari skrip / server / aplikasi lain</h3>
       <p>Siapkan dua nilai rahasia di tempat pengirim berjalan (komputer, server, atau <i>secrets</i> GitHub Actions):</p>
       <pre>KABAR_TOKEN = token GitHub (scope gist) — sama dengan yang Anda pakai di sini
@@ -387,16 +514,30 @@ kabar.kirim("Harga emas", "Naik 2% hari ini", saluran="Investasi", url="https://
       <div class="row-btns"><button class="btn" id="btnTheme">🌓 Ganti tema</button><button class="btn" id="btnSync">⟳ Sinkronkan</button><button class="btn bad" id="btnOut">Keluar dari perangkat ini</button></div></div>
   </div>`;
 }
+function hourOpts(sel) { return Array.from({ length: 24 }, (_, h) => `<option value="${h}" ${h === Number(sel) ? 'selected' : ''}>${String(h).padStart(2, '0')}:00</option>`).join(''); }
+function toggleTheme() {
+  const next = document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
+  document.documentElement.setAttribute('data-theme', next);
+  try { localStorage.setItem('kabar.theme', next); } catch (e) { /* */ }
+}
 function bindSettings() {
   $('#btnBack').onclick = () => { location.hash = '#/'; };
-  $('#btnPush').onclick = () => enablePush().catch((e) => toast('Gagal: ' + e.message));
-  $$('[data-rm]').forEach((b) => { b.onclick = () => removeDevice(b.dataset.rm).catch((e) => toast('Gagal: ' + e.message)); });
-  $('#btnTheme').onclick = () => {
-    const cur = document.documentElement.getAttribute('data-theme') || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
-    const next = cur === 'dark' ? 'light' : 'dark';
-    document.documentElement.setAttribute('data-theme', next);
-    try { localStorage.setItem('kabar.theme', next); } catch (e) { /* */ }
+  $('#btnPush').onclick = () => enablePush();
+  $('#btnLocal').onclick = async () => {
+    try {
+      if (Notification.permission !== 'granted') await Notification.requestPermission();
+      const reg = await navigator.serviceWorker.ready;
+      await reg.showNotification('KABAR · uji tampilan', { body: 'Begini notifikasi akan terlihat.', icon: 'icons/icon-192.png', badge: 'icons/badge-96.png', tag: 'kabar-local' });
+    } catch (e) { pushOut('✕ ' + e.message, 'err'); }
   };
+  diagnose();
+  const saveQuiet = () => writeFiles(({ cfg }) => {
+    cfg.quiet = { on: $('#qOn').checked, from: Number($('#qFrom').value), to: Number($('#qTo').value), tz: Intl.DateTimeFormat().resolvedOptions().timeZone };
+    return { cfg };
+  }).then(() => toast('Jam tenang disimpan')).catch((e) => toast('Gagal: ' + e.message));
+  ['#qOn', '#qFrom', '#qTo'].forEach((id) => { $(id).onchange = saveQuiet; });
+  $$('[data-rm]').forEach((b) => { b.onclick = () => removeDevice(b.dataset.rm).catch((e) => toast('Gagal: ' + e.message)); });
+  $('#btnTheme').onclick = toggleTheme;
   $('#btnSync').onclick = () => sync(true).then(() => { toast('Tersinkron'); render(); }).catch((e) => toast('Gagal: ' + e.message));
   $('#btnOut').onclick = () => {
     if (!confirm('Keluar dari Kabar di perangkat ini? Pesan tetap tersimpan di gist Anda.')) return;
@@ -409,8 +550,7 @@ function bindSettings() {
 function renderWelcome(app) {
   app.dataset.view = 'welcome';
   app.innerHTML = `<div class="welcome" style="grid-column:1/-1"><div class="card" style="text-align:center">
-    <img class="logo" src="icons/icon.svg" alt="">
-    <h2 style="margin:0 0 6px">Kabar</h2>
+    <div class="logo">▌KABAR · MESSAGE TERMINAL<span class="cur"></span></div>
     <p>Kotak pesan &amp; notifikasi pribadi. Terima pesan dari skrip, server, bot, dan aplikasi Anda — dikelompokkan per chat, lengkap dengan notifikasi di HP.</p>
     <div style="text-align:left">
       <ol style="padding-left:20px">
@@ -421,6 +561,7 @@ function renderWelcome(app) {
       <div class="row-btns"><button class="btn pri" id="go" style="flex:1">Masuk</button></div>
       <p style="font-size:12.5px;color:var(--text-3)">Token hanya disimpan di perangkat ini dan hanya bisa mengakses gist — bukan repo atau akun Anda. Gist rahasia tidak tampil publik, tetapi siapa pun yang tahu alamatnya bisa membacanya; jangan kirim kata sandi lewat Kabar.</p>
     </div></div></div>`;
+  $('#tok').onkeydown = (e) => { if (e.key === 'Enter') $('#go').click(); };
   $('#go').onclick = async () => {
     const t = $('#tok').value.trim();
     if (!t) { toast('Tempel token dulu'); return; }
@@ -451,6 +592,7 @@ async function refresh() {
 }
 render();
 refresh();
+setInterval(() => { const c = $('#clock'); if (c) c.innerHTML = clockTxt(); }, 30000);
 setInterval(() => { if (document.visibilityState === 'visible') refresh(); }, 20000);
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') refresh(); });
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {

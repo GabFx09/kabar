@@ -1,5 +1,5 @@
 /* Kabar — service worker: cache app shell + notifikasi push */
-const VERSION = 'kabar-v1';
+const VERSION = 'kabar-v2';
 const ASSETS = ['./', 'index.html', 'app.css', 'app.js', 'manifest.webmanifest', 'icons/icon.svg', 'icons/icon-192.png', 'icons/badge-96.png'];
 
 self.addEventListener('install', (e) => {
