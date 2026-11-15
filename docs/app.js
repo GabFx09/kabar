@@ -301,6 +301,17 @@ function render() {
   setBadge();
 }
 
+function pushBanner() {
+  const st = pushState();
+  if (st === 'ok' || st === 'none') return '';
+  const msg = {
+    off: '🔕 Notifikasi belum aktif di perangkat ini — pesan baru tidak muncul saat Kabar ditutup.',
+    fail: '⚠️ Layanan push menolak perangkat ini. Ketuk untuk mendaftarkan ulang.',
+    denied: '🔕 Izin notifikasi diblokir. Buka pengaturan situs (ikon gembok) → Notifikasi → Izinkan.',
+    ios: '📱 iPhone: tambahkan Kabar ke Layar Utama (Bagikan → Tambahkan ke Layar Utama) agar notifikasi bisa muncul.',
+  }[st];
+  return `<div class="push-banner ${st}">${msg}${st === 'off' || st === 'fail' ? '<button class="btn pri" id="btnPushBanner">Aktifkan</button>' : ''}</div>`;
+}
 function listHtml(r) {
   const q = S.q.trim().toLowerCase();
   let list = channels();
@@ -308,6 +319,7 @@ function listHtml(r) {
   return `<div class="bar"><div class="brand"><span class="brand-mark">KB</span><span class="brand-txt"><b>KABAR</b><small>MESSAGE TERMINAL</small></span></div>
       <div class="clock" id="clock">${clockTxt()}</div>
       <button class="ib" id="btnSet" title="Setelan">${ICON.gear}</button></div>
+    ${pushBanner()}
     <label class="search">${ICON.search}<input id="q" placeholder="Cari chat atau pesan" value="${esc(S.q)}"></label>
     <div class="chats">${list.map((c) => {
       const meta = S.cfg.channels[c.name] || {};
@@ -318,6 +330,8 @@ function listHtml(r) {
     <button class="fab" id="btnNew" title="Chat baru">+ CHAT</button>`;
 }
 function bindList() {
+  const pb = $('#btnPushBanner');
+  if (pb) pb.onclick = () => { location.hash = '#/setelan'; enablePush(); };
   $$('.crow').forEach((el) => { el.onclick = () => { location.hash = '#/c/' + encodeURIComponent(el.dataset.ch); }; });
   $('#btnSet').onclick = () => { location.hash = '#/setelan'; };
   $('#btnNew').onclick = () => {
@@ -555,6 +569,75 @@ function pushOut(text, kind) {
   if (el) { el.className = 'out ' + (kind || ''); el.textContent = text; }
   store.set('lastPushMsg', { text, kind, t: Date.now() });
 }
+/* data kecil yang juga dibaca service worker (agar bisa memperbaiki langganan & cek pesan saat aplikasi ditutup) */
+const SWDATA = 'kabar-data';
+async function swPut(k, v) { try { await (await caches.open(SWDATA)).put(k, new Response(JSON.stringify(v), { headers: { 'Content-Type': 'application/json' } })); } catch (e) { /* */ } }
+async function swGet(k) { try { const r = await (await caches.open(SWDATA)).match(k); return r ? await r.json() : null; } catch (e) { return null; } }
+async function swShare() {
+  if (!('caches' in window) || !S.token || !S.gid) return;
+  await swPut('__auth', { token: S.token, gid: S.gid });
+  const st = (await swGet('__state')) || {};
+  const last = S.msgs.reduce((a, m) => Math.max(a, Date.parse(m.t) || 0), 0);
+  if (document.visibilityState === 'visible' && last && (!st.lastT || last > Date.parse(st.lastT))) st.lastT = new Date(last).toISOString();
+  if (S.myEndpoint) { st.myEndpoint = S.myEndpoint; st.name = deviceName(); }
+  await swPut('__state', st);
+}
+/** status notifikasi perangkat ini: ok | off | fail | denied | ios | none */
+function pushState() {
+  if (!pushSupported()) return /iphone|ipad|ipod/i.test(navigator.userAgent) ? 'ios' : 'none';
+  if (Notification.permission === 'denied') return 'denied';
+  const d = (S.cfg.devices || []).find((x) => x.endpoint === S.myEndpoint);
+  if (Notification.permission !== 'granted' || !d) return 'off';
+  return d.fail ? 'fail' : 'ok';
+}
+async function registerBgCheck(reg) {
+  try {
+    if (!reg || !('periodicSync' in reg)) return 'tidak didukung';
+    const p = await navigator.permissions.query({ name: 'periodic-background-sync' }).catch(() => null);
+    if (p && p.state !== 'granted') return 'belum diizinkan (pasang Kabar ke layar utama)';
+    await reg.periodicSync.register('kabar-cek', { minInterval: 30 * 60 * 1000 });
+    return 'aktif';
+  } catch (e) { return 'tidak tersedia'; }
+}
+/** perbaiki otomatis: bila izin sudah diberikan tapi perangkat tidak/tidak lagi terdaftar di gist, daftar ulang diam-diam */
+let ensuring = false;
+async function ensurePush() {
+  if (ensuring || !S.gid || !pushSupported() || Notification.permission !== 'granted') return;
+  ensuring = true;
+  try {
+    const reg = await navigator.serviceWorker.getRegistration();
+    if (!reg || !reg.active) return;
+    registerBgCheck(reg);
+    let sub = await reg.pushManager.getSubscription();
+    if (sub && sub.options && sub.options.applicationServerKey) {
+      const cur = btoa(String.fromCharCode(...new Uint8Array(sub.options.applicationServerKey))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+      if (cur !== VAPID_PUBLIC) { await sub.unsubscribe(); sub = null; }
+    }
+    const devs = S.cfg.devices || [];
+    const mine = sub && devs.find((d) => d.endpoint === sub.endpoint);
+    if (sub && mine && !mine.fail) {
+      if (S.myEndpoint !== sub.endpoint) { S.myEndpoint = sub.endpoint; store.set('myEndpoint', sub.endpoint); }
+      return;
+    }
+    if (!sub && !S.myEndpoint && !store.get('pushWanted', false)) return; // belum pernah diaktifkan di perangkat ini
+    if (sub && (S.cfg.blocked || []).includes(sub.endpoint)) { store.set('pushWanted', false); return; } // dihapus manual oleh pengguna
+    if (sub && (!mine || mine.fail)) { await sub.unsubscribe(); sub = null; } // dilepas/ditolak layanan push → minta langganan baru
+    if (!sub) sub = await withTimeout(reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(VAPID_PUBLIC) }), 20000, 'push timeout');
+    const j = sub.toJSON();
+    if (!j.endpoint || !j.keys) return;
+    const old = S.myEndpoint;
+    await writeFiles(({ cfg }) => {
+      const prev = (cfg.devices || []).find((d) => d.endpoint === old) || {};
+      cfg.devices = (cfg.devices || []).filter((d) => d.endpoint !== j.endpoint && d.endpoint !== old);
+      cfg.devices.push({ endpoint: j.endpoint, keys: j.keys, name: deviceName(), added: prev.added || new Date().toISOString().slice(0, 10), renewed: new Date().toISOString().slice(0, 10) });
+      return { cfg };
+    });
+    S.myEndpoint = j.endpoint; store.set('myEndpoint', j.endpoint);
+    await swShare();
+    toast('Notifikasi perangkat ini didaftarkan ulang otomatis ✓');
+    render();
+  } catch (e) { /* dicoba lagi saat aplikasi dibuka berikutnya */ } finally { ensuring = false; }
+}
 async function enablePush() {
   const step = (t) => pushOut('… ' + t);
   try {
@@ -581,9 +664,12 @@ async function enablePush() {
     await writeFiles(({ cfg }) => {
       cfg.devices = (cfg.devices || []).filter((d) => d.endpoint !== j.endpoint);
       cfg.devices.push({ endpoint: j.endpoint, keys: j.keys, name: deviceName(), added: new Date().toISOString().slice(0, 10) });
+      cfg.blocked = (cfg.blocked || []).filter((x) => x !== j.endpoint);
       return { cfg };
     });
-    S.myEndpoint = j.endpoint; store.set('myEndpoint', j.endpoint);
+    S.myEndpoint = j.endpoint; store.set('myEndpoint', j.endpoint); store.set('pushWanted', true);
+    await swShare();
+    await registerBgCheck(reg);
     await sync(true);
     if (!(S.cfg.devices || []).some((d) => d.endpoint === j.endpoint)) throw new Error('Perangkat gagal tersimpan di gist (coba lagi).');
     try { await reg.showNotification('KABAR · notifikasi aktif ✓', { body: 'Pesan baru akan muncul di sini, juga saat Kabar ditutup.', icon: 'icons/icon-192.png', badge: 'icons/badge-96.png', tag: 'kabar-test' }); } catch (e) { /* */ }
@@ -617,10 +703,22 @@ async function diagnose() {
     row('Langganan push di browser', subOk ? 'ada' : 'belum', subOk ? 'ok' : 'warn') +
     row('Terdaftar di gist', reg2 ? 'ya' : 'belum', reg2 ? 'ok' : 'bad') +
     row('Perangkat terdaftar (total)', String((S.cfg.devices || []).length), (S.cfg.devices || []).length ? 'ok' : 'warn');
+  let bg = 'tidak didukung';
+  try { const reg = await navigator.serviceWorker.getRegistration(); bg = await registerBgCheck(reg); } catch (e) { /* */ }
+  const me = (S.cfg.devices || []).find((d) => d.endpoint === S.myEndpoint);
+  el.innerHTML += row('Push terakhir sampai', me && me.ok ? esc(me.ok) : me && me.fail ? `ditolak ${me.fail}× — sedang diperbaiki` : '–', me && me.ok && !me.fail ? 'ok' : me && me.fail ? 'bad' : '') +
+    row('Cek pesan di latar belakang (cadangan)', esc(bg), bg === 'aktif' ? 'ok' : 'warn');
+  const log = (S.cfg.pushlog || []).slice(-4).reverse();
+  if (log.length) el.innerHTML += `<div style="display:block"><span>Penolakan push terakhir</span>${log.map((l) => `<small style="display:block;color:var(--text-3)">${esc(String(l.t || '').slice(0, 16).replace('T', ' '))} · ${esc(l.dev || '')} · HTTP ${esc(l.code ?? '?')} · ${esc(l.ch || '')}</small>`).join('')}</div>`;
 }
 async function removeDevice(endpoint) {
-  await writeFiles(({ cfg }) => { cfg.devices = (cfg.devices || []).filter((d) => d.endpoint !== endpoint); return { cfg }; });
+  await writeFiles(({ cfg }) => {
+    cfg.devices = (cfg.devices || []).filter((d) => d.endpoint !== endpoint);
+    cfg.blocked = [...(cfg.blocked || []).filter((x) => x !== endpoint), endpoint].slice(-20);
+    return { cfg };
+  });
   if (endpoint === S.myEndpoint) {
+    store.set('pushWanted', false);
     try { const reg = await navigator.serviceWorker.ready; const sub = await reg.pushManager.getSubscription(); if (sub) await sub.unsubscribe(); } catch (e) { /* */ }
     S.myEndpoint = ''; store.set('myEndpoint', '');
   }
@@ -639,7 +737,14 @@ function settingsHtml() {
       ${devs.length ? devs.map((d) => `<div class="dev"><span>📱 ${esc(d.name || 'Perangkat')}${d.endpoint === S.myEndpoint ? ' <b>(ini)</b>' : ''}<br><small style="color:var(--text-3)">sejak ${esc(d.added || '')}</small></span><button class="btn bad" data-rm="${esc(d.endpoint)}">Hapus</button></div>`).join('') : ''}
       <div class="row-btns"><button class="btn pri" id="btnPush">${mine ? 'Daftarkan ulang' : 'Aktifkan notifikasi'}</button><button class="btn" id="btnLocal">Uji tampilan notifikasi</button></div>
       <div id="pushOut" class="out ${(store.get('lastPushMsg', {}) || {}).kind || ''}">${esc((store.get('lastPushMsg', {}) || {}).text || '')}</div>
-      <div class="diag" id="diag">memeriksa…</div></div>
+      <div class="diag" id="diag">memeriksa…</div>
+      <details class="tips"><summary>Notifikasi tidak muncul saat Kabar ditutup?</summary>
+        <ol>
+          <li>Pasang Kabar ke layar utama (menu browser → <b>Instal aplikasi / Tambahkan ke Layar utama</b>), lalu buka dari ikonnya dan tekan <b>Aktifkan notifikasi</b>.</li>
+          <li>Android: <b>Setelan → Aplikasi → Chrome</b> (atau Kabar) → <b>Notifikasi</b> diizinkan, dan <b>Baterai → Tidak dibatasi</b>. Beberapa HP (Xiaomi, Oppo, Vivo, Samsung) juga perlu <b>Mulai otomatis</b> diaktifkan untuk Chrome.</li>
+          <li>Jangan hapus data situs Chrome — itu mencabut langganan notifikasi.</li>
+          <li>Kabar kini memperbaiki langganan sendiri: bila layanan push menolak perangkat ini, langganan diperbarui otomatis, dan pesan baru tetap dicek berkala di latar belakang sebagai cadangan.</li>
+        </ol></details></div>
     <div class="card"><h3>Enkripsi end-to-end</h3>${cryptoHtml()}</div>
     <div class="card"><h3>Pengingat terjadwal</h3>
       <p>Buat dari chat mana pun: <code>/ingatkan besok 08:00 bayar tagihan</code>, <code>/ingatkan 30m ...</code>, <code>/ingatkan setiap senin 09:00 ...</code>. Dikirim oleh workflow terjadwal di repo Kabar (tiap ±10 menit) — perlu secret <code>KABAR_TOKEN</code> &amp; <code>KABAR_VAPID</code> di repo <a href="${REPO_URL}/settings/secrets/actions" target="_blank" rel="noopener">GabFx09/kabar ↗</a>.</p>
@@ -759,7 +864,8 @@ function bindSettings() {
   $('#btnSync').onclick = () => sync(true).then(() => { toast('Tersinkron'); render(); }).catch((e) => toast('Gagal: ' + e.message));
   $('#btnOut').onclick = () => {
     if (!confirm('Keluar dari Kabar di perangkat ini? Pesan tetap tersimpan di gist Anda.')) return;
-    ['token', 'gid', 'login', 'cfg', 'msgs', 'read', 'myEndpoint'].forEach((k) => store.del(k));
+    ['token', 'gid', 'login', 'cfg', 'msgs', 'read', 'myEndpoint', 'pushWanted'].forEach((k) => store.del(k));
+    try { caches.delete(SWDATA); } catch (e) { /* */ }
     location.hash = '#/'; location.reload();
   };
 }
@@ -796,10 +902,12 @@ document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeShe
 
 /* ------------------------------------------------------------ boot */
 window.addEventListener('hashchange', render);
+let healedAt = 0;
 async function refresh() {
   if (!S.gid) return;
   try {
     const ch = await sync();
+    if (ch || Date.now() - healedAt > 5 * 60 * 1000) { healedAt = Date.now(); swShare().then(ensurePush); }
     if (ch) {
       const r = route();
       const typing = document.activeElement && document.activeElement.id === 'txt' && document.activeElement.value;
@@ -815,5 +923,9 @@ setInterval(() => { if (document.visibilityState === 'visible') refresh(); }, 20
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') refresh(); });
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   navigator.serviceWorker.register('sw.js').catch(() => {});
-  navigator.serviceWorker.addEventListener('message', (e) => { if (e.data && e.data.type === 'push') { S.synced = 0; refresh(); } });
+  navigator.serviceWorker.addEventListener('message', (e) => {
+    if (!e.data) return;
+    if (e.data.type === 'device' && e.data.endpoint) { S.myEndpoint = e.data.endpoint; store.set('myEndpoint', e.data.endpoint); }
+    if (e.data.type === 'push' || e.data.type === 'device') { S.synced = 0; refresh(); }
+  });
 }

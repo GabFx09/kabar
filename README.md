@@ -105,6 +105,16 @@ sandi yang sama; tanpa itu pengiriman gagal (agar tidak ada pesan tak terenkrips
 Nama saluran, waktu, dan prioritas tetap terlihat (dibutuhkan untuk menyusun chat & notifikasi). Isi notifikasi push
 dienkripsi oleh protokol Web Push sendiri. Pengingat terenkripsi dikirim tanpa server perlu tahu kata sandi.
 
+## Notifikasi saat aplikasi ditutup
+
+- Notifikasi dikirim lewat Web Push, jadi tetap muncul walau Kabar tidak dibuka (asal sudah **Aktifkan notifikasi** sekali di perangkat itu).
+- **Perbaikan otomatis:** bila layanan push menolak perangkat (HTTP 404/410), perangkat ditandai dulu — tidak langsung dihapus —
+  dan aplikasi / service worker meminta langganan baru sendiri. Perangkat baru dilepas setelah ditolak berulang kali selama >24 jam.
+- **Cadangan latar belakang:** pada Chrome/Edge untuk Kabar yang dipasang di layar utama, service worker mengecek pesan baru
+  secara berkala (Periodic Background Sync) dan menampilkan notifikasi untuk pesan yang belum diberitahukan.
+- Log pengirim kini mencetak `kabar: notifikasi push → X/Y perangkat`, penolakan per perangkat, dan peringatan bila `KABAR_VAPID`
+  tidak cocok dengan kunci publik aplikasi.
+
 ## Kunci notifikasi (VAPID)
 
 Kunci publik tertanam di `docs/app.js` (`VAPID_PUBLIC`). Kunci privat **tidak** ada di repo; simpan sebagai secret
