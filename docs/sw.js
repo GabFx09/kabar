@@ -1,5 +1,5 @@
 /* Kabar — service worker: cache app shell, notifikasi push, perbaikan langganan otomatis & cek latar belakang */
-const VERSION = 'kabar-v4';
+const VERSION = 'kabar-v5';
 const ASSETS = ['./', 'index.html', 'app.css', 'app.js', 'manifest.webmanifest', 'icons/icon.svg', 'icons/icon-192.png', 'icons/badge-96.png'];
 const DATA = 'kabar-data';   // token+gist (dari aplikasi) & status notifikasi — tidak ikut dihapus saat ganti versi
 const API = 'https://api.github.com';
@@ -57,17 +57,18 @@ function b64ToBytes(b64) {
   return Uint8Array.from([...raw].map((c) => c.charCodeAt(0)));
 }
 /** pastikan langganan push perangkat ini ada & tercatat di gist; perbarui bila ditolak layanan push */
-async function ensureDevice(auth, cfg, oldEndpoint) {
+async function ensureDevice(auth, cfg, oldEndpoint, newSub) {
   const pm = self.registration.pushManager;
   if (!pm || (self.Notification && Notification.permission !== 'granted')) return;
   const st = (await getJ('__state')) || {};
   if (!st.myEndpoint && !oldEndpoint) return; // perangkat ini belum pernah mengaktifkan notifikasi
-  let sub = await pm.getSubscription();
+  let sub = newSub || await pm.getSubscription();
+  if (newSub && !(cfg.blocked || []).includes(newSub.endpoint)) cfg = { ...cfg, devices: [] }; // langganan baru dari browser: langsung catat
   const devs = cfg.devices || [];
   const mine = sub && devs.find((d) => d.endpoint === sub.endpoint);
   if (sub && mine && !mine.fail) return;
   if (sub && (cfg.blocked || []).includes(sub.endpoint)) return; // dihapus manual oleh pengguna
-  if (sub) { try { await sub.unsubscribe(); } catch (e) { /* */ } sub = null; } // dilepas/ditolak layanan push → langganan baru
+  if (sub && !newSub) { try { await sub.unsubscribe(); } catch (e) { /* */ } sub = null; } // dilepas/ditolak layanan push → langganan baru
   if (!sub) sub = await pm.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(VAPID_PUBLIC) });
   const j = sub.toJSON();
   if (!j.endpoint || !j.keys) return;
@@ -145,7 +146,7 @@ self.addEventListener('pushsubscriptionchange', (e) => {
     if (!auth || !auth.token) return;
     const old = e.oldSubscription && e.oldSubscription.endpoint;
     const { cfg } = await readGist(auth);
-    await ensureDevice(auth, cfg, old || '-');
+    await ensureDevice(auth, cfg, old || '-', e.newSubscription || null);
   })().catch(() => {}));
 });
 // cek berkala di latar belakang (Chrome/Edge untuk aplikasi yang dipasang di layar utama)

@@ -303,14 +303,14 @@ function render() {
 
 function pushBanner() {
   const st = pushState();
-  if (st === 'ok' || st === 'none') return '';
+  if (st === 'ok' || st === 'none' || (st !== 'fail' && store.get('bannerHide', '') === st)) return '';
   const msg = {
     off: '🔕 Notifikasi belum aktif di perangkat ini — pesan baru tidak muncul saat Kabar ditutup.',
     fail: '⚠️ Layanan push menolak perangkat ini. Ketuk untuk mendaftarkan ulang.',
     denied: '🔕 Izin notifikasi diblokir. Buka pengaturan situs (ikon gembok) → Notifikasi → Izinkan.',
     ios: '📱 iPhone: tambahkan Kabar ke Layar Utama (Bagikan → Tambahkan ke Layar Utama) agar notifikasi bisa muncul.',
   }[st];
-  return `<div class="push-banner ${st}">${msg}${st === 'off' || st === 'fail' ? '<button class="btn pri" id="btnPushBanner">Aktifkan</button>' : ''}</div>`;
+  return `<div class="push-banner ${st}">${msg}<span class="pb-act">${st === 'off' || st === 'fail' ? '<button class="btn pri" id="btnPushBanner">Aktifkan</button>' : ''}${st !== 'fail' ? '<button class="ib pb-x" id="btnPushHide" title="Sembunyikan">✕</button>' : ''}</span></div>`;
 }
 function listHtml(r) {
   const q = S.q.trim().toLowerCase();
@@ -332,6 +332,8 @@ function listHtml(r) {
 function bindList() {
   const pb = $('#btnPushBanner');
   if (pb) pb.onclick = () => { location.hash = '#/setelan'; enablePush(); };
+  const ph = $('#btnPushHide');
+  if (ph) ph.onclick = () => { store.set('bannerHide', pushState()); render(); toast('Bisa diaktifkan kapan saja di Setelan'); };
   $$('.crow').forEach((el) => { el.onclick = () => { location.hash = '#/c/' + encodeURIComponent(el.dataset.ch); }; });
   $('#btnSet').onclick = () => { location.hash = '#/setelan'; };
   $('#btnNew').onclick = () => {
@@ -640,6 +642,8 @@ async function ensurePush() {
 }
 async function enablePush() {
   const step = (t) => pushOut('… ' + t);
+  if (ensuring) { await new Promise((r) => setTimeout(r, 1500)); }
+  ensuring = true;
   try {
     if (!pushSupported()) {
       const ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
@@ -679,7 +683,7 @@ async function enablePush() {
   } catch (e) {
     pushOut('✕ ' + e.message, 'err');
     toast('Gagal mengaktifkan notifikasi');
-  }
+  } finally { ensuring = false; }
 }
 async function diagnose() {
   const el = $('#diag');
