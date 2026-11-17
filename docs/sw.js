@@ -1,5 +1,5 @@
 /* Kabar — service worker: cache app shell, notifikasi push, perbaikan langganan otomatis & cek latar belakang */
-const VERSION = 'kabar-v5';
+const VERSION = 'kabar-v6';
 const ASSETS = ['./', 'index.html', 'app.css', 'app.js', 'manifest.webmanifest', 'icons/icon.svg', 'icons/icon-192.png', 'icons/badge-96.png'];
 const DATA = 'kabar-data';   // token+gist (dari aplikasi) & status notifikasi — tidak ikut dihapus saat ganti versi
 const API = 'https://api.github.com';
@@ -63,18 +63,21 @@ async function ensureDevice(auth, cfg, oldEndpoint, newSub) {
   const st = (await getJ('__state')) || {};
   if (!st.myEndpoint && !oldEndpoint) return; // perangkat ini belum pernah mengaktifkan notifikasi
   let sub = newSub || await pm.getSubscription();
-  if (newSub && !(cfg.blocked || []).includes(newSub.endpoint)) cfg = { ...cfg, devices: [] }; // langganan baru dari browser: langsung catat
   const devs = cfg.devices || [];
   const mine = sub && devs.find((d) => d.endpoint === sub.endpoint);
   if (sub && mine && !mine.fail) return;
   if (sub && (cfg.blocked || []).includes(sub.endpoint)) return; // dihapus manual oleh pengguna
-  if (sub && !newSub) { try { await sub.unsubscribe(); } catch (e) { /* */ } sub = null; } // dilepas/ditolak layanan push → langganan baru
+  // lepas langganan HANYA bila endpoint ini sudah ditolak layanan push (404/410); yang belum tercatat cukup dicatat ulang
+  if (sub && !newSub && mine && mine.fail) { try { await sub.unsubscribe(); } catch (e) { /* */ } sub = null; }
   if (!sub) sub = await pm.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(VAPID_PUBLIC) });
   const j = sub.toJSON();
   if (!j.endpoint || !j.keys) return;
   const fresh = (await readGist(auth)).cfg;
   const all = fresh.devices || [];
-  const prev = all.find((d) => d.endpoint === (oldEndpoint || st.myEndpoint)) || all.find((d) => d.endpoint === j.endpoint) || {};
+  const here = all.find((d) => d.endpoint === j.endpoint);
+  const stale = [oldEndpoint, st.myEndpoint].filter((x) => x && x !== '-' && x !== j.endpoint);
+  if (here && !here.fail && !all.some((d) => stale.includes(d.endpoint))) { st.myEndpoint = j.endpoint; await putJ('__state', st); return; } // sudah tercatat
+  const prev = here || all.find((d) => d.endpoint === (oldEndpoint || st.myEndpoint)) || {};
   fresh.devices = all.filter((d) => d.endpoint !== j.endpoint && d.endpoint !== oldEndpoint && d.endpoint !== st.myEndpoint);
   fresh.devices.push({ endpoint: j.endpoint, keys: j.keys, name: prev.name || st.name || 'Perangkat', added: prev.added || new Date().toISOString().slice(0, 10), renewed: new Date().toISOString().slice(0, 10) });
   await gh(auth, '/gists/' + auth.gid, { method: 'PATCH', body: JSON.stringify({ files: { [CONFIG_FILE]: { content: JSON.stringify(fresh, null, 1) } } }) });

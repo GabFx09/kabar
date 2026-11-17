@@ -623,17 +623,26 @@ async function ensurePush() {
     }
     if (!sub && !S.myEndpoint && !store.get('pushWanted', false)) return; // belum pernah diaktifkan di perangkat ini
     if (sub && (S.cfg.blocked || []).includes(sub.endpoint)) { store.set('pushWanted', false); return; } // dihapus manual oleh pengguna
-    if (sub && (!mine || mine.fail)) { await sub.unsubscribe(); sub = null; } // dilepas/ditolak layanan push → minta langganan baru
+    // Langganan HANYA dilepas bila layanan push sudah menolak endpoint ini (404/410 → pasti mati).
+    // Bila sekadar belum tercatat di salinan gist (salinan lama / gist belum terbarui), langganan yang masih hidup
+    // JANGAN dilepas — melepasnya justru membuat endpoint yang tercatat ditolak 410 dan HP harus didaftarkan ulang.
+    if (sub && mine && mine.fail) { await sub.unsubscribe(); sub = null; }
     if (!sub) sub = await withTimeout(reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(VAPID_PUBLIC) }), 20000, 'push timeout');
     const j = sub.toJSON();
     if (!j.endpoint || !j.keys) return;
     const old = S.myEndpoint;
+    let wrote = false;
     await writeFiles(({ cfg }) => {
-      const prev = (cfg.devices || []).find((d) => d.endpoint === old) || {};
-      cfg.devices = (cfg.devices || []).filter((d) => d.endpoint !== j.endpoint && d.endpoint !== old);
-      cfg.devices.push({ endpoint: j.endpoint, keys: j.keys, name: deviceName(), added: prev.added || new Date().toISOString().slice(0, 10), renewed: new Date().toISOString().slice(0, 10) });
+      const all = cfg.devices || [];
+      const here = all.find((d) => d.endpoint === j.endpoint);
+      if (here && !here.fail && !(old && old !== j.endpoint && all.some((d) => d.endpoint === old))) return null; // sudah tercatat (versi terbaru)
+      const prev = here || all.find((d) => d.endpoint === old) || {};
+      cfg.devices = all.filter((d) => d.endpoint !== j.endpoint && d.endpoint !== old);
+      cfg.devices.push({ endpoint: j.endpoint, keys: j.keys, name: prev.name || deviceName(), added: prev.added || new Date().toISOString().slice(0, 10), renewed: new Date().toISOString().slice(0, 10) });
+      wrote = true;
       return { cfg };
     });
+    if (!wrote) { S.myEndpoint = j.endpoint; store.set('myEndpoint', j.endpoint); await swShare(); await sync(true).catch(() => {}); render(); return; }
     S.myEndpoint = j.endpoint; store.set('myEndpoint', j.endpoint);
     await swShare();
     toast('Notifikasi perangkat ini didaftarkan ulang otomatis ✓');
@@ -665,8 +674,9 @@ async function enablePush() {
     const j = sub.toJSON();
     if (!j.endpoint || !j.keys) throw new Error('Langganan push tidak lengkap dari browser.');
     step('menyimpan perangkat ke gist');
+    const oldEp = S.myEndpoint;
     await writeFiles(({ cfg }) => {
-      cfg.devices = (cfg.devices || []).filter((d) => d.endpoint !== j.endpoint);
+      cfg.devices = (cfg.devices || []).filter((d) => d.endpoint !== j.endpoint && !(oldEp && d.endpoint === oldEp)); // buang entri lama perangkat ini (tidak dobel)
       cfg.devices.push({ endpoint: j.endpoint, keys: j.keys, name: deviceName(), added: new Date().toISOString().slice(0, 10) });
       cfg.blocked = (cfg.blocked || []).filter((x) => x !== j.endpoint);
       return { cfg };
