@@ -611,10 +611,12 @@ async function ensurePush() {
     if (!reg || !reg.active) return;
     registerBgCheck(reg);
     let sub = await reg.pushManager.getSubscription();
+    let why = '';
     if (sub && sub.options && sub.options.applicationServerKey) {
       const cur = btoa(String.fromCharCode(...new Uint8Array(sub.options.applicationServerKey))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-      if (cur !== VAPID_PUBLIC) { await sub.unsubscribe(); sub = null; }
+      if (cur !== VAPID_PUBLIC) { await sub.unsubscribe(); sub = null; why = 'kunci'; }
     }
+    if (!sub && !why && S.myEndpoint) why = 'hilang'; // browser/Android mencabut langganan (bukan dari Kabar)
     const devs = S.cfg.devices || [];
     const mine = sub && devs.find((d) => d.endpoint === sub.endpoint);
     if (sub && mine && !mine.fail) {
@@ -626,7 +628,7 @@ async function ensurePush() {
     // Langganan HANYA dilepas bila layanan push sudah menolak endpoint ini (404/410 → pasti mati).
     // Bila sekadar belum tercatat di salinan gist (salinan lama / gist belum terbarui), langganan yang masih hidup
     // JANGAN dilepas — melepasnya justru membuat endpoint yang tercatat ditolak 410 dan HP harus didaftarkan ulang.
-    if (sub && mine && mine.fail) { await sub.unsubscribe(); sub = null; }
+    if (sub && mine && mine.fail) { await sub.unsubscribe(); sub = null; why = 'ditolak'; }
     if (!sub) sub = await withTimeout(reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(VAPID_PUBLIC) }), 20000, 'push timeout');
     const j = sub.toJSON();
     if (!j.endpoint || !j.keys) return;
@@ -639,6 +641,7 @@ async function ensurePush() {
       const prev = here || all.find((d) => d.endpoint === old) || {};
       cfg.devices = all.filter((d) => d.endpoint !== j.endpoint && d.endpoint !== old);
       cfg.devices.push({ endpoint: j.endpoint, keys: j.keys, name: prev.name || deviceName(), added: prev.added || new Date().toISOString().slice(0, 10), renewed: new Date().toISOString().slice(0, 10) });
+      if (why) cfg.relog = [...(cfg.relog || []), { t: new Date().toISOString(), dev: prev.name || deviceName(), why, by: 'app' }].slice(-30);
       wrote = true;
       return { cfg };
     });
@@ -722,6 +725,15 @@ async function diagnose() {
   const me = (S.cfg.devices || []).find((d) => d.endpoint === S.myEndpoint);
   el.innerHTML += row('Push terakhir sampai', me && me.ok ? esc(me.ok) : me && me.fail ? `ditolak ${me.fail}× — sedang diperbaiki` : '–', me && me.ok && !me.fail ? 'ok' : me && me.fail ? 'bad' : '') +
     row('Cek pesan di latar belakang (cadangan)', esc(bg), bg === 'aktif' ? 'ok' : 'warn');
+  const wk = (S.cfg.relog || []).filter((x) => x.dev === deviceName() && Date.now() - Date.parse(x.t) < 7 * 864e5);
+  const lost = wk.filter((x) => x.why === 'hilang' || x.why === 'ditolak' || x.why === 'diganti').length;
+  el.innerHTML += row('Langganan dicabut browser (7 hari)', lost ? lost + '×' : 'tidak pernah', lost >= 2 ? 'bad' : lost ? 'warn' : 'ok');
+  if (lost >= 2 && /android/i.test(ua)) {
+    el.innerHTML += `<div style="display:block"><span>Kenapa notifikasi sering putus?</span><small style="display:block;color:var(--text-2);line-height:1.5">Android/Chrome berulang kali mencabut langganan push Kabar. Di Android, izin notifikasi berlaku <b>per alamat situs</b> — Kabar, Radar Saham &amp; Prakiraan Dunia sama-sama di <b>${esc(location.host)}</b>, jadi bila salah satu aplikasi itu notifikasinya dimatikan, Chrome ikut mencabut langganan Kabar.<br>
+      1. Pengaturan Android → Aplikasi → <b>Kabar</b>, <b>Radar Saham</b>, <b>Prakiraan Dunia</b> → Notifikasi: <b>Izinkan</b> (ketiganya).<br>
+      2. Chrome → ⋮ → Setelan → Setelan situs → Notifikasi → pastikan <b>${esc(location.host)}</b> diizinkan.<br>
+      3. Pengaturan → Aplikasi → <b>Chrome</b> (dan Kabar) → Baterai: <b>Tidak dibatasi</b>; matikan "Jeda aktivitas aplikasi jika tidak digunakan".</small></div>`;
+  }
   const log = (S.cfg.pushlog || []).slice(-4).reverse();
   if (log.length) el.innerHTML += `<div style="display:block"><span>Penolakan push terakhir</span>${log.map((l) => `<small style="display:block;color:var(--text-3)">${esc(String(l.t || '').slice(0, 16).replace('T', ' '))} · ${esc(l.dev || '')} · HTTP ${esc(l.code ?? '?')} · ${esc(l.ch || '')}</small>`).join('')}</div>`;
 }
